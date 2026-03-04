@@ -6,16 +6,19 @@ const DB_PATH = path.join(process.cwd(), "data", "db.json");
 
 interface DB {
   settings: Settings;
+  billPaidOverrides: Record<string, boolean>;
 }
 
 const DEFAULT_DB: DB = {
   settings: {
-    currentCashBalance: 0,
+    bankAccounts: [{ id: "1", name: "Primary Checking", balance: 0, type: "checking" as const }],
     lowCashThreshold: 10000,
     googleSheetsApiKey: "",
     questSpreadsheetId: "1NdvISYmIBlFRpTQGnCpC8918nM7ImW3xAASgj6dBQwg",
     labcorpSpreadsheetId: "1TL-yi9u-8ktDC_b8aLZWfBy_UBm6Yuh3HEMrZga9OEo",
+    payrollSpreadsheetId: "1DpbhSFoCeu0U-RQCap_qvOVhCEeyP6vwqOZDGC-Bt0c",
   },
+  billPaidOverrides: {},
 };
 
 function ensureDataDir() {
@@ -32,7 +35,12 @@ export function readDB(): DB {
     return DEFAULT_DB;
   }
   const raw = fs.readFileSync(DB_PATH, "utf-8");
-  return { ...DEFAULT_DB, ...JSON.parse(raw) };
+  const parsed = JSON.parse(raw);
+  return {
+    ...DEFAULT_DB,
+    ...parsed,
+    settings: { ...DEFAULT_DB.settings, ...parsed.settings },
+  };
 }
 
 export function writeDB(data: DB): void {
@@ -49,4 +57,14 @@ export function saveSettings(settings: Partial<Settings>): Settings {
   db.settings = { ...db.settings, ...settings };
   writeDB(db);
   return db.settings;
+}
+
+export function getBillPaidOverrides(): Record<string, boolean> {
+  return readDB().billPaidOverrides || {};
+}
+
+export function setBillPaidOverride(billId: string, paid: boolean): void {
+  const db = readDB();
+  db.billPaidOverrides = { ...(db.billPaidOverrides || {}), [billId]: paid };
+  writeDB(db);
 }

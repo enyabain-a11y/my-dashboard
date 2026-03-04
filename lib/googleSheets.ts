@@ -1,4 +1,5 @@
 import { Bill } from "@/types";
+import { computePlannedPaymentDate } from "@/lib/plannedPayment";
 
 // Fetches publicly-shared Google Sheets as CSV — no API key required.
 // To add a new sheet source, add an entry to SHEET_CONFIGS below.
@@ -12,6 +13,7 @@ interface SheetConfig {
     billId: number;
     amountDue: number;    // "current balance" or "balance due"
     dueDate: number;
+    invoiceDate?: number; // optional — invoice/bill date column
     status?: number;      // optional — defaults to "scheduled" if missing
     labCode?: number;     // appended to vendorPrefix as "Prefix - CODE"
   };
@@ -22,13 +24,14 @@ const SHEET_CONFIGS: SheetConfig[] = [
     spreadsheetId: process.env.QUEST_SPREADSHEET_ID || "1NdvISYmIBlFRpTQGnCpC8918nM7ImW3xAASgj6dBQwg",
     gid: "0",
     source: "quest",
-    vendorPrefix: "Quest",
+    vendorPrefix: "Quest Diagnostics",
     columnMap: {
       billId: 3,      // Invoice Number
       amountDue: 7,   // Current Balance
       dueDate: 5,     // Due Date
+      invoiceDate: 4, // Invoice Date (if present)
       status: 8,      // Status ("Open")
-      labCode: 2,     // Lab Code (e.g. NYJ, WHC) — appended to vendor name
+      // labCode omitted — all Quest bills show as "Quest Diagnostics" regardless of location
     },
   },
   {
@@ -40,7 +43,7 @@ const SHEET_CONFIGS: SheetConfig[] = [
       billId: 0,      // Bill Number
       amountDue: 6,   // Balance Due
       dueDate: 4,     // Due
-      // no status column — defaults to "scheduled"
+      invoiceDate: 3, // Invoice Date (if present)
     },
   },
 ];
@@ -53,9 +56,7 @@ function parseAmount(raw: string): number {
 // Normalizes M/D/YYYY or MM/DD/YYYY → YYYY-MM-DD
 function parseDate(raw: string): string {
   if (!raw) return "";
-  // Already ISO-ish
   if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
-  // M/D/YYYY
   const match = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (match) {
     const [, m, d, y] = match;
@@ -69,7 +70,6 @@ function parseStatus(raw: string | undefined): Bill["status"] {
   const val = raw.toLowerCase();
   if (val.includes("paid")) return "paid";
   if (val.includes("pending") || val.includes("approval")) return "pending_approval";
-  // "open", "open/unpaid", etc. → scheduled
   return "scheduled";
 }
 
@@ -112,8 +112,7 @@ async function fetchSheetBills(config: SheetConfig): Promise<Bill[]> {
   }
 
   const rows = parseCSV(text);
-  // Skip header row (index 0)
-  const dataRows = rows.slice(1);
+  const dataRows = rows.slice(1); // skip header
 
   const bills: Bill[] = dataRows
     .map((row, i) => {
@@ -122,17 +121,24 @@ async function fetchSheetBills(config: SheetConfig): Promise<Bill[]> {
       const billId = row[columnMap.billId] || `${source}_${i}`;
       const amountRaw = row[columnMap.amountDue] || "0";
       const dueDateRaw = row[columnMap.dueDate] || "";
+      const invoiceDateRaw = columnMap.invoiceDate !== undefined ? row[columnMap.invoiceDate] : undefined;
       const statusRaw = columnMap.status !== undefined ? row[columnMap.status] : undefined;
       const labCode = columnMap.labCode !== undefined ? row[columnMap.labCode] : undefined;
 
       const vendorName = labCode ? `${vendorPrefix} - ${labCode}` : vendorPrefix;
+      const dueDate = parseDate(dueDateRaw);
+      const invoiceDate = invoiceDateRaw ? parseDate(invoiceDateRaw) : undefined;
+      const status = parseStatus(statusRaw);
 
       return {
         bill_id: `${source}_${billId}`,
         vendor_name: vendorName,
-        due_date: parseDate(dueDateRaw),
+        invoice_date: invoiceDate || undefined,
+        due_date: dueDate,
+        planned_payment_date: computePlannedPaymentDate(source, dueDate),
         amount: parseAmount(amountRaw),
-        status: parseStatus(statusRaw),
+        status,
+        paid: status === "paid",
         source,
       } as Bill;
     })

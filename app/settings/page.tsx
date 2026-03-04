@@ -2,22 +2,29 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { BankAccount } from "@/types";
 
 interface SettingsForm {
-  currentCashBalance: string;
+  bankAccounts: BankAccount[];
   lowCashThreshold: string;
   googleSheetsApiKey: string;
   questSpreadsheetId: string;
   labcorpSpreadsheetId: string;
+  payrollSpreadsheetId: string;
+}
+
+function newAccount(): BankAccount {
+  return { id: String(Date.now()), name: "", balance: 0, type: "checking" };
 }
 
 export default function SettingsPage() {
   const [form, setForm] = useState<SettingsForm>({
-    currentCashBalance: "",
+    bankAccounts: [{ id: "1", name: "Primary Checking", balance: 0, type: "checking" as const }],
     lowCashThreshold: "10000",
     googleSheetsApiKey: "",
     questSpreadsheetId: "1NdvISYmIBlFRpTQGnCpC8918nM7ImW3xAASgj6dBQwg",
     labcorpSpreadsheetId: "1TL-yi9u-8ktDC_b8aLZWfBy_UBm6Yuh3HEMrZga9OEo",
+    payrollSpreadsheetId: "1DpbhSFoCeu0U-RQCap_qvOVhCEeyP6vwqOZDGC-Bt0c",
   });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -28,11 +35,12 @@ export default function SettingsPage() {
       .then((r) => r.json())
       .then((data) => {
         setForm({
-          currentCashBalance: String(data.currentCashBalance ?? 0),
+          bankAccounts: data.bankAccounts ?? [{ id: "1", name: "Primary Checking", balance: 0 }],
           lowCashThreshold: String(data.lowCashThreshold ?? 10000),
           googleSheetsApiKey: data.googleSheetsApiKey === "***" ? "" : data.googleSheetsApiKey,
           questSpreadsheetId: data.questSpreadsheetId ?? "",
           labcorpSpreadsheetId: data.labcorpSpreadsheetId ?? "",
+          payrollSpreadsheetId: data.payrollSpreadsheetId ?? "",
         });
       })
       .catch(() => setError("Failed to load settings"));
@@ -48,11 +56,12 @@ export default function SettingsPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          currentCashBalance: parseFloat(form.currentCashBalance) || 0,
+          bankAccounts: form.bankAccounts,
           lowCashThreshold: parseFloat(form.lowCashThreshold) || 10000,
           googleSheetsApiKey: form.googleSheetsApiKey,
           questSpreadsheetId: form.questSpreadsheetId,
           labcorpSpreadsheetId: form.labcorpSpreadsheetId,
+          payrollSpreadsheetId: form.payrollSpreadsheetId,
         }),
       });
       if (!res.ok) throw new Error("Save failed");
@@ -65,9 +74,41 @@ export default function SettingsPage() {
     }
   };
 
-  const handleChange = (field: keyof SettingsForm) => (e: React.ChangeEvent<HTMLInputElement>) => {
-    setForm((prev) => ({ ...prev, [field]: e.target.value }));
+  const updateAccount = (id: string, field: keyof BankAccount, value: string) => {
+    setForm((prev) => ({
+      ...prev,
+      bankAccounts: prev.bankAccounts.map((a) => {
+        if (a.id !== id) return a;
+        if (field === "balance") return { ...a, balance: parseFloat(value) || 0 };
+        if (field === "type") return { ...a, type: value as BankAccount["type"] };
+        return { ...a, [field]: value };
+      }),
+    }));
   };
+
+  const addAccount = () => {
+    setForm((prev) => ({ ...prev, bankAccounts: [...prev.bankAccounts, newAccount()] }));
+  };
+
+  const removeAccount = (id: string) => {
+    setForm((prev) => ({
+      ...prev,
+      bankAccounts: prev.bankAccounts.filter((a) => a.id !== id),
+    }));
+  };
+
+  const handleChange =
+    (field: keyof Omit<SettingsForm, "bankAccounts">) =>
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setForm((prev) => ({ ...prev, [field]: e.target.value }));
+    };
+
+  const net = form.bankAccounts.reduce(
+    (sum, a) => sum + (a.type === "credit_card" ? -(a.balance || 0) : (a.balance || 0)),
+    0
+  );
+  const fmt = (n: number) =>
+    new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -90,27 +131,79 @@ export default function SettingsPage() {
         )}
 
         <form onSubmit={handleSave} className="space-y-8">
-          {/* Cash Balance */}
+          {/* Bank Accounts */}
           <section className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
-            <h3 className="text-base font-semibold text-gray-900">Cash Balance</h3>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Current Cash Balance ($)
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                value={form.currentCashBalance}
-                onChange={handleChange("currentCashBalance")}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="e.g. 50000"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                This is the baseline from which all 30-day projections are calculated.
-              </p>
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-semibold text-gray-900">Bank Accounts</h3>
+              {form.bankAccounts.length > 1 && (
+                <span className="text-sm text-gray-500">
+                  Net: <span className={`font-semibold ${net < 0 ? "text-red-600" : "text-gray-800"}`}>{fmt(net)}</span>
+                </span>
+              )}
             </div>
 
+            <div className="space-y-3">
+              {form.bankAccounts.map((account, i) => (
+                <div key={account.id} className="flex items-center gap-2">
+                  <div className="flex-1">
+                    <input
+                      type="text"
+                      value={account.name}
+                      onChange={(e) => updateAccount(account.id, "name", e.target.value)}
+                      placeholder={`Account ${i + 1} name`}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div className="w-40">
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={account.balance}
+                      onChange={(e) => updateAccount(account.id, "balance", e.target.value)}
+                      placeholder="0.00"
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div className="w-36">
+                    <select
+                      value={account.type}
+                      onChange={(e) => updateAccount(account.id, "type", e.target.value)}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    >
+                      <option value="checking">Checking</option>
+                      <option value="credit_card">Credit Card</option>
+                    </select>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeAccount(account.id)}
+                    disabled={form.bankAccounts.length === 1}
+                    className="p-2 text-gray-400 hover:text-red-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    title="Remove account"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={addAccount}
+              className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+            >
+              + Add account
+            </button>
+
+            <p className="text-xs text-gray-500">
+              Opening balances are summed to calculate today&apos;s total available cash and the
+              30-day projection baseline.
+            </p>
+          </section>
+
+          {/* Low Cash Threshold */}
+          <section className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+            <h3 className="text-base font-semibold text-gray-900">Alerts</h3>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Low Cash Warning Threshold ($)
@@ -124,7 +217,7 @@ export default function SettingsPage() {
                 placeholder="10000"
               />
               <p className="text-xs text-gray-500 mt-1">
-                Days below this amount are highlighted yellow on the timeline.
+                Days where total cash falls below this amount are highlighted yellow on the timeline.
               </p>
             </div>
           </section>
@@ -176,6 +269,35 @@ export default function SettingsPage() {
                 onChange={handleChange("labcorpSpreadsheetId")}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
+            </div>
+          </section>
+
+          {/* Payroll */}
+          <section className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+            <h3 className="text-base font-semibold text-gray-900">Payroll</h3>
+            <p className="text-sm text-gray-500">
+              Payroll runs on the 10th and 25th of each month. The sheet must be shared publicly
+              (anyone with the link can view). Each tab should be named{" "}
+              <code className="bg-gray-100 px-1 rounded">SM-10 Mar 2026</code> /{" "}
+              <code className="bg-gray-100 px-1 rounded">SM-25 Mar 2026</code>. Only the Pay Run
+              Total is read — individual salaries are never displayed.
+            </p>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Payroll Spreadsheet ID
+              </label>
+              <input
+                type="text"
+                value={form.payrollSpreadsheetId}
+                onChange={handleChange("payrollSpreadsheetId")}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                The ID from the spreadsheet URL:{" "}
+                <code className="bg-gray-100 px-1 rounded">
+                  docs.google.com/spreadsheets/d/<strong>ID</strong>/edit
+                </code>
+              </p>
             </div>
           </section>
 
